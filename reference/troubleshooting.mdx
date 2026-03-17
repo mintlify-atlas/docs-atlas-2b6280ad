@@ -1,0 +1,142 @@
+---
+title: Troubleshooting
+description: Common issues and solutions for the iMessage & Mail Claude Code skill.
+---
+
+<AccordionGroup>
+  <Accordion title='"Operation not permitted" or "Permission denied" when querying databases'>
+    **Cause:** The terminal app does not have Full Disk Access. macOS protects the Messages, Mail, and Address Book databases under the Full Disk Access entitlement.
+
+    **Fix:**
+
+    1. Open **System Settings** > **Privacy & Security** > **Full Disk Access**
+    2. Click the **+** button
+    3. Add your terminal app (Terminal.app, iTerm2, Warp, Ghostty, etc.)
+    4. Restart the terminal
+
+    After granting access, retry the query:
+
+    ```bash
+    sqlite3 ~/Library/Messages/chat.db "SELECT COUNT(*) FROM message;"
+    ```
+
+    If the count returns without error, Full Disk Access is working.
+  </Accordion>
+
+  <Accordion title="Messages appear empty or show [Rich Text/Hidden]">
+    **Cause:** The message content is stored in the `attributedBody` column as an `NSAttributedString` binary blob rather than in the `text` column. This is common for messages sent with formatting, reactions, or from newer macOS versions.
+
+    **Fix:** Extract readable text from `attributedBody` using the hex pipeline:
+
+    ```bash
+    sqlite3 ~/Library/Messages/chat.db \
+      "SELECT HEX(attributedBody) FROM message WHERE ROWID = <ROWID>;" \
+      | xxd -r -p | strings
+    ```
+
+    Replace `<ROWID>` with the actual message ROWID. To find the ROWID of messages with missing text:
+
+    ```bash
+    sqlite3 ~/Library/Messages/chat.db \
+      "SELECT ROWID FROM message WHERE text IS NULL AND attributedBody IS NOT NULL ORDER BY date DESC LIMIT 10;"
+    ```
+  </Accordion>
+
+  <Accordion title="AppleScript send fails silently or with an error">
+    **Cause:** Automation permission has not been granted, or was previously denied, for Messages.app or Mail.app.
+
+    **Fix:**
+
+    1. Open **System Settings** > **Privacy & Security** > **Automation**
+    2. Find your terminal app in the list
+    3. Ensure **Messages** and/or **Mail** are enabled under it
+
+    If your terminal app does not appear in the Automation list, trigger the permission dialog by attempting to send a message. macOS will prompt you — click **Allow**.
+
+    To test that AppleScript can reach Messages.app without sending anything:
+
+    ```bash
+    osascript -e 'tell application "Messages" to get name'
+    ```
+
+    This should return `Messages` without error.
+  </Accordion>
+
+  <Accordion title="Contact names not resolved (showing raw phone numbers)">
+    **Cause:** Either the Address Book database is not accessible (Full Disk Access issue), or the contact does not exist in Contacts.app.
+
+    **Fix:**
+
+    First verify Full Disk Access is granted (see the first accordion above).
+
+    Then check whether the contact exists in the Address Book database:
+
+    ```bash
+    sqlite3 ~/Library/Application\ Support/AddressBook/AddressBook-v22.abcddb \
+      "SELECT ZFIRSTNAME, ZLASTNAME FROM ZABCDRECORD AS T1
+       INNER JOIN ZABCDPHONENUMBER AS T2 ON T1.Z_PK = T2.ZOWNER
+       WHERE T2.ZFULLNUMBER LIKE '%<last_7_digits>%';"
+    ```
+
+    If the query returns no rows, the number is not saved in Contacts.app. The skill will display the raw phone number in this case — this is expected behavior.
+  </Accordion>
+
+  <Accordion title="Mail database not found">
+    **Cause:** The `V10` directory in the database path corresponds to macOS 15. On older macOS versions the Mail data directory may be `V9`, `V8`, or earlier.
+
+    **Fix:** List the Mail directory to find the correct version:
+
+    ```bash
+    ls ~/Library/Mail/
+    ```
+
+    Use whichever `V*` directory is present. For example, if you see `V9`:
+
+    ```bash
+    sqlite3 ~/Library/Mail/V9/MailData/"Envelope Index" "SELECT COUNT(*) FROM messages;"
+    ```
+
+    If you have customized the skill installation, update the path in `SKILL.md` and any agent files that reference the Mail database.
+  </Accordion>
+
+  <Accordion title='iMessage send fails with "not registered"'>
+    **Cause:** The destination phone number is not registered with iMessage. The number belongs to an SMS-only device or a non-Apple phone.
+
+    **Action:** Inform the user that the recipient cannot receive iMessages at that number. Note that SMS messages **cannot** be sent via AppleScript — the `osascript` approach only works for iMessage. The user will need to send the SMS manually from Messages.app or from their iPhone.
+
+    To verify whether a number is iMessage-capable before attempting to send, there is no reliable programmatic check — the failure response from AppleScript is the only signal.
+  </Accordion>
+
+  <Accordion title="Conversation reader shows no messages">
+    **Cause:** A contact may have multiple handles in `chat.db` — for example, one entry for their phone number and another for their email address. The query may be matching a handle that has no messages in the current thread.
+
+    Alternatively, the conversation may be a group chat where the contact appears as a participant but not as the primary handle.
+
+    **Fix:**
+
+    Try searching by phone number directly instead of by name:
+
+    ```bash
+    sqlite3 ~/Library/Messages/chat.db \
+      "SELECT h.id, COUNT(m.ROWID) as count
+       FROM message m
+       JOIN handle h ON m.handle_id = h.ROWID
+       WHERE h.id LIKE '%5551234%'
+       GROUP BY h.id;"
+    ```
+
+    If no results appear, check whether the contact is part of a group chat:
+
+    ```bash
+    sqlite3 ~/Library/Messages/chat.db \
+      "SELECT c.display_name, c.chat_identifier, COUNT(m.ROWID) as count
+       FROM chat c
+       JOIN chat_message_join cmj ON c.ROWID = cmj.chat_id
+       JOIN message m ON cmj.message_id = m.ROWID
+       WHERE c.display_name IS NOT NULL AND c.display_name != ''
+       GROUP BY c.ROWID
+       ORDER BY MAX(m.date) DESC
+       LIMIT 10;"
+    ```
+  </Accordion>
+</AccordionGroup>

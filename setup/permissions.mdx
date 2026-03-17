@@ -1,0 +1,64 @@
+---
+title: macOS Permissions
+description: Configure Full Disk Access and AppleScript automation permissions on macOS.
+---
+
+The iMessage & Mail skill reads protected SQLite databases and controls Messages.app and Mail.app via AppleScript. Both permission types must be granted before the skill can function.
+
+## Full Disk Access
+
+Full Disk Access lets your terminal read the SQLite databases that macOS protects by default — including `chat.db` (iMessage history), the Mail envelope index, and the Contacts database.
+
+<Steps>
+  <Step title="Open Privacy & Security settings">
+    Open **System Settings** and navigate to **Privacy & Security** > **Full Disk Access**.
+  </Step>
+
+  <Step title="Add your terminal app">
+    Click the **+** button and add the terminal application you use with Claude Code. Common options include:
+
+    - Terminal.app (`/System/Applications/Utilities/Terminal.app`)
+    - iTerm2 (`/Applications/iTerm.app`)
+    - Warp (`/Applications/Warp.app`)
+    - Ghostty (`/Applications/Ghostty.app`)
+
+    If you launch Claude Code from an IDE terminal (e.g., VS Code), add the IDE's executable instead.
+  </Step>
+
+  <Step title="Restart your terminal">
+    Fully quit your terminal application and reopen it. macOS does not apply Full Disk Access to already-running processes.
+  </Step>
+</Steps>
+
+## AppleScript Automation
+
+Sending iMessages and emails requires AppleScript access to Messages.app and Mail.app. macOS handles this through its Automation permission system.
+
+**On first send**, macOS will display a dialog asking whether to allow your terminal to control Messages.app or Mail.app. Click **Allow**. This prompt appears once per app (once for Messages, once for Mail) and will not appear again after you grant it.
+
+<Warning>
+  If you click **Don't Allow**, the skill's send functionality will fail silently — the send command will appear to complete but no message will be delivered. To re-enable it, go to **System Settings** > **Privacy & Security** > **Automation**, find your terminal app, and enable the toggles for **Messages** and **Mail**.
+</Warning>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title='"Permission denied" error when querying a database'>
+    This means Full Disk Access has not been granted to your terminal, or the grant was applied before you restarted the terminal.
+
+    1. Confirm your terminal appears in **System Settings** > **Privacy & Security** > **Full Disk Access** with its toggle enabled.
+    2. Fully quit and relaunch the terminal.
+    3. Retry the query.
+
+    If you use multiple terminal apps, make sure you have added the one that is currently running Claude Code.
+  </Accordion>
+
+  <Accordion title="Send command completes but no message is delivered">
+    This indicates the Automation permission for Messages.app or Mail.app was denied.
+
+    1. Open **System Settings** > **Privacy & Security** > **Automation**.
+    2. Find your terminal app in the list.
+    3. Enable the toggle next to **Messages** (for iMessage) and/or **Mail** (for email).
+    4. Retry the send command.
+  </Accordion>
+</AccordionGroup>

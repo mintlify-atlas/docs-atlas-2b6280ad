@@ -1,0 +1,70 @@
+---
+title: Introduction
+description: A Claude Code skill for reading, searching, and sending iMessages and emails on macOS.
+---
+
+# iMessage & Mail
+
+iMessage & Mail is a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill that gives Claude direct access to your macOS Messages and Apple Mail data. It reads from local SQLite databases and sends messages via AppleScript — everything runs on your Mac, nothing leaves your machine.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install the skill and send your first message in minutes
+  </Card>
+  <Card title="Agent Overview" icon="robot" href="/agents/overview">
+    Learn how the six specialized agents work together
+  </Card>
+  <Card title="Installation" icon="download" href="/setup/installation">
+    Step-by-step setup including macOS permissions
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/reference/architecture">
+    Understand the SQLite databases and AppleScript layer
+  </Card>
+</CardGroup>
+
+## What you can do
+
+<CardGroup cols={2}>
+  <Card title="Recent Activity" icon="clock" href="/agents/recent-activity">
+    See who texted or emailed you, with message previews and unread counts
+  </Card>
+  <Card title="Read Conversations" icon="messages" href="/agents/conversation-reader">
+    Read full iMessage and email history for any contact
+  </Card>
+  <Card title="Search Messages" icon="magnifying-glass" href="/agents/message-search">
+    Full-text search across all iMessage conversations and Apple Mail
+  </Card>
+  <Card title="Find Attachments" icon="paperclip" href="/agents/attachment-finder">
+    Find photos, videos, PDFs, and other files from messages and emails
+  </Card>
+  <Card title="Read Mail" icon="envelope" href="/agents/mail-reader">
+    Browse, search, and read Apple Mail emails directly
+  </Card>
+  <Card title="Send Messages" icon="paper-plane" href="/agents/send-message">
+    Send iMessages and emails via AppleScript with a confirmation prompt
+  </Card>
+</CardGroup>
+
+## How it works
+
+The skill is an orchestrator (`SKILL.md`) that classifies your intent and routes to one of six specialized agent markdown files. Each agent executes SQLite queries against local macOS databases and uses AppleScript to control Messages.app and Mail.app for sending.
+
+```
+imessage-mail/
+├── SKILL.md                    # Orchestrator — intent classification and routing
+└── agents/
+    ├── recent-activity.md      # Recent contacts and email overview
+    ├── conversation-reader.md  # Full message history for a contact
+    ├── message-search.md       # Cross-source keyword search
+    ├── attachment-finder.md    # Find files and media from messages/emails
+    ├── mail-reader.md          # Apple Mail database queries
+    └── send-message.md         # Send iMessages and emails via AppleScript
+```
+
+## Privacy
+
+This skill runs entirely locally on your Mac. No message data, contacts, or email content is sent to any external service beyond what Claude Code normally processes. All database queries are read-only except for the send functionality, which uses AppleScript to send via your local apps.
+
+<Note>
+  This skill requires **Full Disk Access** granted to your terminal application in macOS System Settings. See [Permissions](/setup/permissions) for setup instructions.
+</Note>

@@ -1,0 +1,87 @@
+---
+title: Agent overview
+description: How the iMessage & Mail skill routes your requests to specialized agents.
+---
+
+The iMessage & Mail skill uses an orchestrator pattern. When you invoke `/imessage-mail`, the `SKILL.md` entry point classifies your intent and reads the matched agent file, which contains the full workflow, SQL queries, and output instructions for that task.
+
+## Intent classification
+
+The orchestrator maps input patterns to agents using this table:
+
+| Input pattern | Agent | Description |
+|---|---|---|
+| "recent messages", "who texted me", "latest texts" | `recent-activity` | List recent unique iMessage contacts with resolved names |
+| Contact name or phone number + "messages"/"texts" | `conversation-reader` | Read iMessage and email history for a specific contact |
+| "find attachment", "photos from", "files from" | `attachment-finder` | Find attachments in iMessage conversations and email |
+| "search for", "find messages about", keyword search | `message-search` | Full-text search across all iMessages and Apple Mail |
+| "email", "mail", "inbox", "unread emails" | `mail-reader` | Read, search, and inspect Apple Mail emails |
+| "send", "text", "reply", "respond", "tell them" | `send-message` | Send iMessages or emails via AppleScript |
+
+## Input detection priority
+
+When input matches more than one pattern, the orchestrator applies these rules in order:
+
+<Steps>
+  <Step title="Send/reply keywords">
+    If input contains `send`, `text [someone]`, `reply`, `respond`, `tell them`, or `message [someone] saying` → route to **send-message**.
+  </Step>
+  <Step title="Email/mail keywords">
+    If input contains `email`, `mail`, `inbox`, `unread email`, `newsletter`, or a sender address with `@` → route to **mail-reader** (unless send intent is also present, then route to **send-message**).
+  </Step>
+  <Step title="Phone number detection">
+    If input contains a phone number pattern (digits, `+`, dashes, parentheses) → check for send intent first; otherwise extract digits and route to **conversation-reader**.
+  </Step>
+  <Step title="Attachment keywords">
+    If input contains `attachment`, `photo`, `image`, `file`, `video`, or `pdf` → route to **attachment-finder**.
+  </Step>
+  <Step title="Search keywords">
+    If input contains `search`, `find messages`, or `look for` → route to **message-search**.
+  </Step>
+  <Step title="Recent/activity keywords">
+    If input contains `recent`, `latest`, `who texted`, or `new messages` → route to **recent-activity**.
+  </Step>
+  <Step title="Contact name">
+    If input is a person's name (possibly with "messages" or "texts") → route to **conversation-reader** (resolve name first).
+  </Step>
+  <Step title="Ambiguous source">
+    If it is unclear whether the user means iMessage or email — for example "messages from John" — spawn **conversation-reader** and **mail-reader** as parallel subagents, then combine results.
+  </Step>
+</Steps>
+
+<Note>
+  If none of the above patterns match, the orchestrator defaults to **recent-activity**.
+</Note>
+
+## Parallel subagent patterns
+
+The orchestrator uses the Agent tool to spawn subagents for parallelism in three recurring situations:
+
+**Contact resolution batching** — When multiple phone numbers need to be resolved, they are batched into 2–3 subagent calls (each resolving 5–7 numbers) instead of one call per handle.
+
+**Cross-source search** — When searching for messages from a specific person, two subagents run simultaneously: one via `conversation-reader` for iMessage and one via `mail-reader` for Apple Mail. Results are then merged and presented chronologically.
+
+**Rich text extraction** — When multiple messages contain `[Rich Text/Hidden]` content, a single subagent processes all the ROWIDs in one batch rather than querying `attributedBody` one message at a time.
+
+## Agents
+
+<CardGroup cols={2}>
+  <Card title="Recent activity" icon="clock" href="/agents/recent-activity">
+    List recent iMessage contacts and Apple Mail activity with resolved contact names.
+  </Card>
+  <Card title="Conversation reader" icon="messages" href="/agents/conversation-reader">
+    Read full iMessage and email history for any contact.
+  </Card>
+  <Card title="Message search" icon="magnifying-glass" href="/agents/message-search">
+    Full-text search across iMessage conversations and Apple Mail.
+  </Card>
+  <Card title="Attachment finder" icon="paperclip" href="/agents/attachment-finder">
+    Find photos, videos, PDFs, and other files from messages and emails.
+  </Card>
+  <Card title="Mail reader" icon="envelope" href="/agents/mail-reader">
+    Browse, search, and read Apple Mail emails from the local database.
+  </Card>
+  <Card title="Send message" icon="paper-plane" href="/agents/send-message">
+    Send iMessages and emails via AppleScript using Messages.app and Mail.app.
+  </Card>
+</CardGroup>

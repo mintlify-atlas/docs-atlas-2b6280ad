@@ -1,0 +1,226 @@
+---
+title: Conversation reader
+description: Read full iMessage and email history for any contact.
+---
+
+The conversation reader agent retrieves and displays message history for a specific contact across iMessage and Apple Mail. It resolves contact names, handles rich text messages, and can interleave both sources chronologically.
+
+## When to use
+
+This agent is triggered when you provide a contact name or phone number along with a request to read messages:
+
+- "Show me my texts with John"
+- "Messages from +1234567890"
+- "Emails from Jane"
+- "All communications with John"
+
+## Workflow
+
+<Steps>
+  <Step title="Resolve the contact">
+    <Tabs>
+      <Tab title="Name lookup">
+        If you provide a name, query the Address Book for matching phone numbers and email addresses:
+
+        ```bash
+        sqlite3 ~/Library/Application\ Support/AddressBook/AddressBook-v22.abcddb "
+        SELECT T2.ZFULLNUMBER, T1.ZFIRSTNAME, T1.ZLASTNAME
+        FROM ZABCDRECORD AS T1
+        INNER JOIN ZABCDPHONENUMBER AS T2 ON T1.Z_PK = T2.ZOWNER
+        WHERE LOWER(T1.ZFIRSTNAME) LIKE LOWER('%<name>%')
+           OR LOWER(T1.ZLASTNAME) LIKE LOWER('%<name>%')
+           OR LOWER(T1.ZFIRSTNAME || ' ' || T1.ZLASTNAME) LIKE LOWER('%<name>%');"
+        ```
+
+        Also resolve their email address for Mail lookups:
+
+        ```bash
+        sqlite3 ~/Library/Application\ Support/AddressBook/AddressBook-v22.abcddb "
+        SELECT T2.ZADDRESS, T1.ZFIRSTNAME, T1.ZLASTNAME
+        FROM ZABCDRECORD AS T1
+        INNER JOIN ZABCDEMAILADDRESS AS T2 ON T1.Z_PK = T2.ZOWNER
+        WHERE LOWER(T1.ZFIRSTNAME) LIKE LOWER('%<name>%')
+           OR LOWER(T1.ZLASTNAME) LIKE LOWER('%<name>%')
+           OR LOWER(T1.ZFIRSTNAME || ' ' || T1.ZLASTNAME) LIKE LOWER('%<name>%');"
+        ```
+
+        If multiple contacts match, the agent presents them and asks you to choose. Then it verifies the number exists in `chat.db`:
+
+        ```bash
+        sqlite3 ~/Library/Messages/chat.db "SELECT id FROM handle WHERE id LIKE '%<last_7_digits>%';"
+        ```
+      </Tab>
+      <Tab title="Phone number">
+        If you provide a phone number, the agent extracts digits only and uses them directly for the `chat.db` lookup.
+      </Tab>
+      <Tab title="Email address">
+        If you provide an email address, the agent uses it directly for the Mail lookup and also checks whether it exists as an iMessage handle in `chat.db`.
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Fetch iMessages">
+    Query `chat.db` for messages from the resolved handle. Defaults to the 25 most recent; increase if you ask for more.
+
+    ```bash
+    sqlite3 ~/Library/Messages/chat.db "
+    SELECT
+      m.ROWID,
+      CASE WHEN m.is_from_me = 1 THEN 'Me' ELSE 'Them' END as sender,
+      COALESCE(m.text, CASE WHEN m.attributedBody IS NOT NULL THEN '[Rich Text/Hidden]' ELSE '[No Text]' END) as content,
+      datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime') as timestamp,
+      a.filename,
+      a.mime_type
+    FROM message m
+    JOIN handle h ON m.handle_id = h.ROWID
+    LEFT JOIN message_attachment_join maj ON m.ROWID = maj.message_id
+    LEFT JOIN attachment a ON maj.attachment_id = a.ROWID
+    WHERE h.id LIKE '%<digits_only>'
+    ORDER BY m.date DESC
+    LIMIT <count>;"
+    ```
+  </Step>
+
+  <Step title="Fetch emails from Apple Mail">
+    Run in parallel with Step 2 using a subagent, if the contact has an email address.
+
+    **Emails received from the contact:**
+
+    ```bash
+    sqlite3 ~/Library/Mail/V10/MailData/"Envelope Index" "
+    SELECT
+      m.ROWID,
+      CASE WHEN mb.url LIKE '%Sent%' THEN 'Me' ELSE a.comment END as sender,
+      sub.subject,
+      datetime(m.date_received, 'unixepoch', 'localtime') as received,
+      CASE WHEN m.read = 1 THEN 'Read' ELSE 'UNREAD' END as status,
+      m.size
+    FROM messages m
+    LEFT JOIN addresses a ON m.sender = a.ROWID
+    LEFT JOIN subjects sub ON m.subject = sub.ROWID
+    LEFT JOIN mailboxes mb ON m.mailbox = mb.ROWID
+    WHERE (a.address LIKE '%<email_or_domain>%' OR a.comment LIKE '%<contact_name>%')
+      AND m.deleted = 0
+    ORDER BY m.date_received DESC
+    LIMIT 20;"
+    ```
+
+    **Emails sent to the contact:**
+
+    ```bash
+    sqlite3 ~/Library/Mail/V10/MailData/"Envelope Index" "
+    SELECT
+      m.ROWID,
+      'Me' as sender,
+      sub.subject,
+      datetime(m.date_sent, 'unixepoch', 'localtime') as sent,
+      m.size
+    FROM messages m
+    JOIN recipients r ON r.message = m.ROWID
+    JOIN addresses a ON r.address = a.ROWID
+    LEFT JOIN subjects sub ON m.subject = sub.ROWID
+    WHERE (a.address LIKE '%<email>%' OR a.comment LIKE '%<contact_name>%')
+      AND m.deleted = 0
+    ORDER BY m.date_sent DESC
+    LIMIT 20;"
+    ```
+  </Step>
+
+  <Step title="Read email body content">
+    When you want to read an email in full, the agent locates and reads its `.emlx` file from disk:
+
+    ```bash
+    find ~/Library/Mail/V10 -name "<MESSAGE_ROWID>.emlx" -o -name "<MESSAGE_ROWID>.partial.emlx" 2>/dev/null | head -1
+    ```
+
+    ```bash
+    cat "$(find ~/Library/Mail/V10 -name '<MESSAGE_ROWID>.emlx' 2>/dev/null | head -1)" | tail -n +2
+    ```
+
+    For HTML-heavy emails, the agent strips tags to return plain text:
+
+    ```bash
+    cat "$(find ~/Library/Mail/V10 -name '<MESSAGE_ROWID>.emlx' 2>/dev/null | head -1)" | tail -n +2 | sed -n '/<body/,/<\/body>/p' | sed 's/<[^>]*>//g' | head -50
+    ```
+  </Step>
+
+  <Step title="Get email attachments">
+    ```bash
+    sqlite3 ~/Library/Mail/V10/MailData/"Envelope Index" "
+    SELECT att.name
+    FROM attachments att
+    WHERE att.message = <MESSAGE_ROWID>;"
+    ```
+  </Step>
+
+  <Step title="Extract rich text bodies (iMessage)">
+    For any iMessage where content is `[Rich Text/Hidden]`, the agent spawns a subagent to extract all affected ROWIDs in one batch:
+
+    ```bash
+    for ROWID in <ROWID1> <ROWID2> <ROWID3>; do
+      echo "---ROWID:$ROWID---"
+      sqlite3 ~/Library/Messages/chat.db "SELECT HEX(attributedBody) FROM message WHERE ROWID = $ROWID;" | xxd -r -p | strings | head -3
+    done
+    ```
+
+    The extracted text replaces `[Rich Text/Hidden]` in the final output.
+  </Step>
+
+  <Step title="Handle tapback reactions (optional)">
+    To check for tapback reactions on messages:
+
+    ```bash
+    sqlite3 ~/Library/Messages/chat.db "
+    SELECT
+      m.ROWID,
+      m.associated_message_type,
+      m.associated_message_guid
+    FROM message m
+    JOIN handle h ON m.handle_id = h.ROWID
+    WHERE h.id LIKE '%<digits_only>'
+      AND m.associated_message_type != 0
+    ORDER BY m.date DESC
+    LIMIT 20;"
+    ```
+
+    Tapback type codes: `2000` = Love, `2001` = Like, `2002` = Dislike, `2003` = Laugh, `2004` = Emphasis, `2005` = Question.
+  </Step>
+</Steps>
+
+## Output format
+
+iMessages and emails are presented in separate sections by default. If you ask for "all communications", they are interleaved chronologically.
+
+```
+## Conversation with John Smith
+
+### iMessages (+1234567890)
+*25 most recent*
+
+**14:30 Me**: Hey, are you free tonight?
+**14:32 John**: Yeah! What's up?
+**14:33 Me**: Check out this photo 📎 IMG_1234.jpg
+**14:35 John**: 😂 That's hilarious
+
+---
+
+### Emails (john@example.com)
+*10 most recent*
+
+| Status | Direction | Subject | Date |
+|--------|-----------|---------|------|
+| Read | From John | Re: Project Update | Mar 16, 10:00 |
+| Read | To John | Project Update | Mar 15, 14:30 |
+| UNREAD | From John | Invoice #1234 | Mar 14, 09:00 |
+```
+
+<Note>
+  iMessages are shown in conversational format by default. Ask for a table if you prefer structured output.
+</Note>
+
+## Suggested follow-ups
+
+- **Reply** — "Want to reply to this conversation?" → routes to [send-message](/agents/send-message)
+- **Browse attachments** — "Want to see all attachments from this conversation?" → routes to [attachment-finder](/agents/attachment-finder)
+- **Earlier messages** — "Want me to go further back?"
+- **Read an email** — "Want me to read any of these emails in full?"

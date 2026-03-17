@@ -1,0 +1,71 @@
+---
+title: Requirements
+description: System requirements and prerequisites for the iMessage & Mail Claude Code skill.
+---
+
+## System requirements
+
+| Requirement | Details |
+|-------------|---------|
+| **macOS** | Tested on macOS 15+ / Apple Silicon. May work on earlier versions, but database paths and schema may differ. |
+| **Claude Code** | The Claude Code CLI must be installed and authenticated. |
+| **Terminal** | Any terminal app (Terminal.app, iTerm2, Warp, Ghostty, etc.) with Full Disk Access granted. |
+
+## macOS permissions
+
+<Note>
+  **Full Disk Access is required.** The skill queries SQLite databases in `~/Library/Messages/`, `~/Library/Mail/`, and `~/Library/Application Support/AddressBook/`. macOS restricts access to these directories by default. You must grant Full Disk Access to your terminal application in **System Settings** > **Privacy & Security** > **Full Disk Access** before the skill will work.
+</Note>
+
+For sending messages and emails, macOS will prompt you once to allow your terminal to control **Messages.app** and **Mail.app** via AppleScript. You can manage this permission in **System Settings** > **Privacy & Security** > **Automation**.
+
+## App prerequisites
+
+- **Messages.app** must be signed into iMessage for iMessage features to work. SMS forwarding from an iPhone also works if configured.
+- **Mail.app** must have at least one email account configured and synced for email features to work.
+
+## Required database paths
+
+The skill reads from three local SQLite databases. All three must exist on your system.
+
+| Database | Path | Contains |
+|----------|------|---------|
+| Messages | `~/Library/Messages/chat.db` | iMessage/SMS history, attachments, handles |
+| Mail | `~/Library/Mail/V10/MailData/Envelope Index` | Email metadata, senders, subjects, mailboxes |
+| Contacts | `~/Library/Application Support/AddressBook/AddressBook-v22.abcddb` | Names, phone numbers, email addresses |
+
+<Warning>
+  The Mail database path includes `V10`, which corresponds to the mail store format used on macOS 15. On older macOS versions, this directory may be `V9`, `V8`, or an earlier version number. If the skill cannot find the Mail database, check which `V*` directory exists under `~/Library/Mail/` and confirm the path with `ls ~/Library/Mail/`.
+</Warning>
+
+## Verifying your setup
+
+Run these commands in your terminal to confirm each database is accessible before using the skill.
+
+**Messages database:**
+
+```bash
+sqlite3 ~/Library/Messages/chat.db "SELECT COUNT(*) FROM message;"
+```
+
+A number (your message count) means access is working. A `unable to open database file` or `authorization denied` error means Full Disk Access has not been granted.
+
+**Mail database:**
+
+```bash
+sqlite3 ~/Library/Mail/V10/MailData/"Envelope Index" "SELECT COUNT(*) FROM messages;"
+```
+
+If the `V10` path does not exist, find the correct version:
+
+```bash
+ls ~/Library/Mail/
+```
+
+**Contacts database:**
+
+```bash
+sqlite3 ~/Library/Application\ Support/AddressBook/AddressBook-v22.abcddb "SELECT COUNT(*) FROM ZABCDRECORD;"
+```
+
+All three commands should return a row count with no errors. If any fail with a permissions error, revisit the [Full Disk Access setup](/setup/permissions).

@@ -1,0 +1,92 @@
+---
+title: Architecture
+description: How iMessage & Mail works internally — orchestration, agents, and data flow.
+---
+
+## Overview
+
+The iMessage & Mail skill follows an **orchestrator + subagent** pattern. A single entry point (`SKILL.md`) classifies user intent and delegates to one of six specialized agent files. Each agent executes SQLite queries or AppleScript commands and returns formatted output.
+
+## File structure
+
+```
+imessage-mail/
+├── SKILL.md                    # Orchestrator — intent classification and routing
+└── agents/
+    ├── recent-activity.md      # Recent contacts and email overview
+    ├── conversation-reader.md  # Full message history for a contact
+    ├── message-search.md       # Cross-source keyword search
+    ├── attachment-finder.md    # Find files and media from messages/emails
+    ├── mail-reader.md          # Apple Mail database queries
+    └── send-message.md         # Send iMessages and emails via AppleScript
+```
+
+## Data flow
+
+<Steps>
+  <Step title="Intent classification">
+    `SKILL.md` receives the user's input and matches it against a routing table. Keywords like `"recent"`, `"search"`, `"send"`, or a contact name determine which agent handles the request.
+  </Step>
+  <Step title="Agent dispatch">
+    Claude Code's `Read` tool loads the matched agent `.md` file from `~/.claude/skills/imessage-mail/agents/`. The agent file contains its own workflow, SQL queries, and output format.
+  </Step>
+  <Step title="Data retrieval">
+    The agent executes `sqlite3` queries against one or more of the three local macOS databases, or calls `osascript` for send operations.
+  </Step>
+  <Step title="Formatted output">
+    Results are presented as markdown tables or formatted conversation threads, with contact names resolved from the Address Book.
+  </Step>
+</Steps>
+
+## The three data sources
+
+| Database | Path | Contents |
+|----------|------|----------|
+| Messages | `~/Library/Messages/chat.db` | iMessage/SMS history, attachments, handles |
+| Mail | `~/Library/Mail/V10/MailData/Envelope Index` | Email metadata, senders, subjects, mailboxes |
+| Contacts | `~/Library/Application Support/AddressBook/AddressBook-v22.abcddb` | Names, phone numbers, email addresses |
+
+All three databases are SQLite files queried directly with `sqlite3`. No Mail.app or Messages.app process is required for reads — only for sending via AppleScript.
+
+## Orchestrator pattern
+
+`SKILL.md` acts as the single entry point. It contains:
+
+- **An intent routing table** mapping input patterns to agent files
+- **Input detection logic** with explicit priority ordering (send intent checked before email intent, email before contact name, etc.)
+- **Execution instructions** that tell Claude Code to `Read` the agent file and follow its workflow step-by-step
+
+Agent files are plain markdown. They are not code modules or scripts — they are structured instructions that Claude Code interprets and executes. This makes them easy to read, modify, and extend without touching any runtime code.
+
+## Parallel subagent patterns
+
+The skill uses Claude Code's `Agent` tool to spawn parallel subagents for three performance-critical operations:
+
+### Contact resolution batching
+
+When the recent-activity agent returns 10–15 phone number handles, resolving them one at a time would be slow. Instead, the orchestrator batches handles into 2–3 Agent tool calls (each resolving 5–7 numbers) running concurrently. Each subagent runs a `LIKE '%<last_7_digits>%'` query against `ZABCDPHONENUMBER` and returns the matching name.
+
+### Cross-source search
+
+When a query is ambiguous — for example, "messages from John" could mean iMessage or email — the orchestrator spawns two parallel subagents:
+
+- One running `conversation-reader` against `chat.db`
+- One running `mail-reader` against the Mail `Envelope Index`
+
+Results are merged and presented chronologically.
+
+### Rich text extraction
+
+When multiple messages in a conversation have `[Rich Text/Hidden]` content (stored as `NSAttributedString` blobs in `attributedBody`), a single subagent extracts all of them in one batch using the hex extraction pipeline:
+
+```bash
+sqlite3 ~/Library/Messages/chat.db "SELECT HEX(attributedBody) FROM message WHERE ROWID = <ROWID>;" | xxd -r -p | strings
+```
+
+Batching avoids spawning one subagent per message.
+
+## How the Agent tool is used
+
+Claude Code's `Agent` tool spawns a general-purpose subagent with a prompt string. The orchestrator constructs the prompt inline, embedding the specific phone number, email address, or ROWID to query. The subagent runs the shell command and returns the raw output. The orchestrator then formats the combined results.
+
+This pattern keeps each agent file focused on a single responsibility while allowing the orchestrator to coordinate parallel work across agents.

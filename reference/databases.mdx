@@ -1,0 +1,241 @@
+---
+title: Database Reference
+description: SQLite database schemas and paths used by the iMessage & Mail skill.
+---
+
+The iMessage & Mail skill queries three local SQLite databases on macOS. All access is read-only except for send operations, which use AppleScript instead of direct database writes.
+
+<Info>
+  Your terminal app must have **Full Disk Access** in System Settings > Privacy & Security to read these databases. See the [installation guide](/introduction) for setup steps.
+</Info>
+
+## Messages database
+
+**Path:** `~/Library/Messages/chat.db`
+
+Contains all iMessage and SMS history, contact handles, chat threads, and attachment metadata.
+
+```bash
+sqlite3 ~/Library/Messages/chat.db
+```
+
+### Table: `message`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `ROWID` | integer | Primary key |
+| `text` | text | Plain text content (may be null for rich text messages) |
+| `attributedBody` | blob | `NSAttributedString` binary — used when `text` is null |
+| `date` | integer | Timestamp in nanoseconds since Jan 1, 2001 (Cocoa epoch) |
+| `is_from_me` | integer | `1` if sent by the local user, `0` if received |
+| `handle_id` | integer | Foreign key to `handle.ROWID` |
+
+### Table: `handle`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `ROWID` | integer | Primary key |
+| `id` | text | Phone number (E.164) or email address of the contact |
+
+### Table: `chat`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `ROWID` | integer | Primary key |
+| `display_name` | text | Group chat name (null for 1:1 conversations) |
+| `chat_identifier` | text | Phone number, email, or group chat ID |
+
+### Table: `chat_message_join`
+
+Junction table linking chats to messages.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `chat_id` | integer | Foreign key to `chat.ROWID` |
+| `message_id` | integer | Foreign key to `message.ROWID` |
+
+### Timestamp conversion
+
+iMessage stores timestamps as nanoseconds since **January 1, 2001** (the Cocoa/CoreData epoch), not the standard Unix epoch. To convert to a human-readable local time:
+
+```sql
+datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime')
+```
+
+The constant `978307200` is the Unix timestamp for January 1, 2001 — the offset between the two epochs.
+
+### The `attributedBody` column
+
+Many iMessages store content as an `NSAttributedString` binary blob in `attributedBody` rather than in the `text` column. Querying `text` for these messages returns null or an empty string.
+
+To extract readable text from `attributedBody`:
+
+```bash
+sqlite3 ~/Library/Messages/chat.db \
+  "SELECT HEX(attributedBody) FROM message WHERE ROWID = <ROWID>;" \
+  | xxd -r -p | strings
+```
+
+### Sample query
+
+Recent messages per contact handle, with timestamps:
+
+```sql
+SELECT
+  h.id,
+  MAX(datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime')) AS last_message,
+  COUNT(m.ROWID) AS message_count,
+  SUM(CASE WHEN m.is_from_me = 0 THEN 1 ELSE 0 END) AS received,
+  SUM(CASE WHEN m.is_from_me = 1 THEN 1 ELSE 0 END) AS sent
+FROM message m
+JOIN handle h ON m.handle_id = h.ROWID
+GROUP BY h.id
+ORDER BY MAX(m.date) DESC
+LIMIT 15;
+```
+
+---
+
+## Mail database
+
+**Path:** `~/Library/Mail/V10/MailData/Envelope Index`
+
+Contains metadata for all emails in Apple Mail: senders, subjects, dates, read/unread status, and mailbox assignments. Note that the file has no extension.
+
+```bash
+sqlite3 ~/Library/Mail/V10/MailData/"Envelope Index"
+```
+
+<Note>
+  The `V10` directory corresponds to macOS 15. On older macOS versions the path may be `V9`, `V8`, etc. Run `ls ~/Library/Mail/` to find the correct version directory.
+</Note>
+
+### Table: `messages`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `ROWID` | integer | Primary key |
+| `sender` | integer | Foreign key to `addresses.ROWID` |
+| `subject` | integer | Foreign key to `subjects.ROWID` |
+| `date_received` | integer | Unix epoch timestamp |
+| `date_sent` | integer | Unix epoch timestamp |
+| `read` | integer | `1` if read, `0` if unread |
+| `deleted` | integer | `1` if deleted/trashed |
+| `flagged` | integer | `1` if flagged |
+
+### Table: `addresses`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `ROWID` | integer | Primary key |
+| `comment` | text | Display name of the sender |
+| `address` | text | Email address |
+
+### Table: `subjects`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `ROWID` | integer | Primary key |
+| `subject` | text | Email subject line |
+
+### Timestamp format
+
+Apple Mail uses standard Unix epoch integers for `date_received` and `date_sent`:
+
+```sql
+datetime(m.date_received, 'unixepoch', 'localtime')
+```
+
+### Sample query
+
+Recent emails with sender name, subject, and read status:
+
+```sql
+SELECT
+  m.ROWID,
+  a.comment AS sender_name,
+  a.address AS sender_email,
+  sub.subject,
+  datetime(m.date_received, 'unixepoch', 'localtime') AS received,
+  CASE WHEN m.read = 1 THEN 'Read' ELSE 'UNREAD' END AS status,
+  m.flagged
+FROM messages m
+LEFT JOIN addresses a ON m.sender = a.ROWID
+LEFT JOIN subjects sub ON m.subject = sub.ROWID
+WHERE m.deleted = 0
+ORDER BY m.date_received DESC
+LIMIT 10;
+```
+
+Unread count:
+
+```sql
+SELECT COUNT(*) FROM messages WHERE deleted = 0 AND read = 0;
+```
+
+---
+
+## Address Book database
+
+**Path:** `~/Library/Application Support/AddressBook/AddressBook-v22.abcddb`
+
+Contains all contacts from Contacts.app. Used by the skill to resolve phone numbers and email addresses to display names.
+
+```bash
+sqlite3 ~/Library/Application\ Support/AddressBook/AddressBook-v22.abcddb
+```
+
+### Table: `ZABCDRECORD`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `Z_PK` | integer | Primary key |
+| `ZFIRSTNAME` | text | First name |
+| `ZLASTNAME` | text | Last name |
+
+### Table: `ZABCDPHONENUMBER`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `ZOWNER` | integer | Foreign key to `ZABCDRECORD.Z_PK` |
+| `ZFULLNUMBER` | text | Phone number as stored in Contacts |
+
+### Table: `ZABCDEMAILADDRESS`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `ZOWNER` | integer | Foreign key to `ZABCDRECORD.Z_PK` |
+| `ZADDRESS` | text | Email address |
+
+### Sample queries
+
+Resolve a phone number to a contact name (matching on last 7 digits to handle formatting differences):
+
+```sql
+SELECT ZFIRSTNAME, ZLASTNAME
+FROM ZABCDRECORD AS T1
+INNER JOIN ZABCDPHONENUMBER AS T2 ON T1.Z_PK = T2.ZOWNER
+WHERE T2.ZFULLNUMBER LIKE '%3059651'
+LIMIT 1;
+```
+
+Resolve a contact name to phone number:
+
+```sql
+SELECT T2.ZFULLNUMBER, T1.ZFIRSTNAME, T1.ZLASTNAME
+FROM ZABCDRECORD AS T1
+INNER JOIN ZABCDPHONENUMBER AS T2 ON T1.Z_PK = T2.ZOWNER
+WHERE LOWER(T1.ZFIRSTNAME) LIKE LOWER('%sarah%')
+   OR LOWER(T1.ZLASTNAME) LIKE LOWER('%sarah%')
+   OR LOWER(T1.ZFIRSTNAME || ' ' || T1.ZLASTNAME) LIKE LOWER('%sarah%');
+```
+
+Resolve a contact name to email address:
+
+```sql
+SELECT T2.ZADDRESS, T1.ZFIRSTNAME, T1.ZLASTNAME
+FROM ZABCDRECORD AS T1
+INNER JOIN ZABCDEMAILADDRESS AS T2 ON T1.Z_PK = T2.ZOWNER
+WHERE LOWER(T1.ZFIRSTNAME) LIKE LOWER('%john%')
+   OR LOWER(T1.ZLASTNAME) LIKE LOWER('%john%');
+```

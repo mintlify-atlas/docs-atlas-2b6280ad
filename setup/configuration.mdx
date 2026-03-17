@@ -1,0 +1,111 @@
+---
+title: Configuration
+description: Database paths, timestamp formats, and advanced configuration for the iMessage & Mail skill.
+---
+
+The iMessage & Mail skill reads directly from macOS system databases. This page documents the default paths, timestamp conversion formulas, and how to handle rich text messages that appear empty.
+
+## Database paths
+
+The skill uses three SQLite databases, all at fixed paths on macOS:
+
+| Database | Path | Contains |
+|---|---|---|
+| Messages | `~/Library/Messages/chat.db` | iMessage/SMS history, attachments, handles |
+| Mail | `~/Library/Mail/V10/MailData/Envelope Index` | Email metadata, senders, subjects, mailboxes |
+| Contacts | `~/Library/Application Support/AddressBook/AddressBook-v22.abcddb` | Names, phone numbers, email addresses |
+
+Verify that each database exists before using the skill:
+
+```bash
+ls ~/Library/Messages/chat.db
+ls "~/Library/Mail/V10/MailData/Envelope Index"
+ls "~/Library/Application Support/AddressBook/AddressBook-v22.abcddb"
+```
+
+You can also open any of them directly with `sqlite3` to confirm access:
+
+```bash
+sqlite3 ~/Library/Messages/chat.db ".tables"
+```
+
+<Note>
+  If `Envelope Index` is missing, Mail.app may not have an account configured or may not have synced yet. Open Mail.app and wait for it to finish downloading before using email features.
+</Note>
+
+## Timestamp formats
+
+The two databases use different epoch systems. Using the wrong conversion formula will produce timestamps that are off by 31 years.
+
+### iMessage: Mac CoreData (Cocoa) epoch
+
+iMessage stores timestamps as seconds since **January 1, 2001** (not the Unix epoch of January 1, 1970). On modern macOS, `message.date` is stored in **nanoseconds**, so the value must be divided by 1,000,000,000 before the epoch offset is applied.
+
+The offset between the Cocoa epoch and the Unix epoch is **978,307,200 seconds**.
+
+Conversion formula:
+
+```sql
+datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime')
+```
+
+Example query using this conversion:
+
+```sql
+SELECT
+  datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime') AS sent_at,
+  m.text
+FROM message m
+ORDER BY m.date DESC
+LIMIT 10;
+```
+
+### Apple Mail: Unix epoch
+
+Apple Mail uses standard Unix epoch (seconds since January 1, 1970) for the `date_received` and `date_sent` columns. No offset adjustment is needed.
+
+Conversion formula:
+
+```sql
+datetime(m.date_received, 'unixepoch', 'localtime')
+```
+
+Example query:
+
+```sql
+SELECT
+  datetime(m.date_received, 'unixepoch', 'localtime') AS received_at,
+  m.subject,
+  m.sender
+FROM messages m
+ORDER BY m.date_received DESC
+LIMIT 10;
+```
+
+## Rich text / attributedBody
+
+Some iMessages store their content as an `NSAttributedString` binary blob in the `attributedBody` column rather than plain text in the `text` column. When this happens, the `text` column is `NULL` and the message appears empty or as `[Rich Text/Hidden]` in query results.
+
+To extract readable text from an `attributedBody` value, pipe the hex-encoded blob through `xxd` and `strings`:
+
+```bash
+sqlite3 ~/Library/Messages/chat.db "SELECT HEX(attributedBody) FROM message WHERE ROWID = <ROWID>;" | xxd -r -p | strings
+```
+
+Replace `<ROWID>` with the integer row ID of the message you want to read. To find the ROWID for messages with missing text:
+
+```sql
+SELECT
+  ROWID,
+  datetime(date / 1000000000 + 978307200, 'unixepoch', 'localtime') AS sent_at,
+  handle_id
+FROM message
+WHERE text IS NULL
+  AND attributedBody IS NOT NULL
+ORDER BY date DESC
+LIMIT 20;
+```
+
+<Note>
+  When multiple messages in a conversation have rich text content, the skill batches all extractions into a single subagent call rather than querying them one at a time.
+</Note>

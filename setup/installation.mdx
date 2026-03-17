@@ -1,0 +1,62 @@
+---
+title: Installation
+description: Install the iMessage & Mail skill into your Claude Code skills directory.
+---
+
+The iMessage & Mail skill runs entirely on your Mac and requires no external services. Installation is a two-step process: clone the repository, then copy the skill files into Claude Code's skills directory.
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/stat-guy/imessage-mail.git
+    ```
+  </Step>
+
+  <Step title="Create the skills directory">
+    ```bash
+    mkdir -p ~/.claude/skills/imessage-mail
+    ```
+  </Step>
+
+  <Step title="Copy the skill files">
+    ```bash
+    cp -r imessage-mail/SKILL.md ~/.claude/skills/imessage-mail/
+    cp -r imessage-mail/agents ~/.claude/skills/imessage-mail/
+    ```
+  </Step>
+
+  <Step title="Verify the installation">
+    Confirm that the skill files are in place:
+
+    ```bash
+    ls ~/.claude/skills/imessage-mail/
+    ls ~/.claude/skills/imessage-mail/agents/
+    ```
+
+    You should see `SKILL.md` in the first output and the six agent files in the second:
+
+    ```
+    SKILL.md  agents/
+    ```
+
+    ```
+    attachment-finder.md  conversation-reader.md  mail-reader.md
+    message-search.md     recent-activity.md      send-message.md
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  Claude Code looks for skills in `~/.claude/skills/`. Each subdirectory is treated as a skill, and the `SKILL.md` file in that directory is loaded as the skill's entry point when you invoke it with `/imessage-mail`.
+</Tip>
+
+<Note>
+  **What each file does:**
+
+  - `SKILL.md` — The orchestrator. Classifies your intent (recent messages, search, send, etc.) and routes to the correct agent.
+  - `agents/` — Specialized handlers, one per task. Each agent file contains the SQL queries, AppleScript, and workflow instructions for its specific capability.
+</Note>
+
+## Next steps
+
+Before using the skill, grant the required macOS permissions so Claude Code can read your message databases and send messages on your behalf. See [macOS Permissions](/setup/permissions).

@@ -1,0 +1,240 @@
+---
+title: Message search
+description: Full-text search across iMessage conversations and Apple Mail.
+---
+
+The message search agent searches for keywords or phrases across all iMessage conversations and Apple Mail. It can search either source individually or both simultaneously using parallel subagents.
+
+## When to use
+
+This agent is triggered when you ask:
+
+- "Find messages about X"
+- "Search for messages mentioning dinner"
+- "Did anyone text or email me about the meeting?"
+- Any keyword or phrase search across conversations or emails
+
+## Source selection
+
+The agent decides which sources to search based on your input:
+
+| Input | Sources searched |
+|---|---|
+| "search texts" or "search iMessages" | iMessage only |
+| "search emails" or "search mail" | Apple Mail only |
+| "search for messages about X" or ambiguous phrasing | Both — spawns parallel subagents |
+
+---
+
+## iMessage search
+
+<Steps>
+  <Step title="Search by text content">
+    Search the `text` column using a case-insensitive `LIKE` query (SQLite `LIKE` is case-insensitive for ASCII by default):
+
+    ```bash
+    sqlite3 ~/Library/Messages/chat.db "
+    SELECT
+      m.ROWID,
+      h.id as contact,
+      CASE WHEN m.is_from_me = 1 THEN 'Me' ELSE 'Them' END as sender,
+      m.text,
+      datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime') as timestamp
+    FROM message m
+    JOIN handle h ON m.handle_id = h.ROWID
+    WHERE m.text LIKE '%<search_term>%'
+    ORDER BY m.date DESC
+    LIMIT 20;"
+    ```
+  </Step>
+
+  <Step title="Search in attributedBody (rich text)">
+    Many messages store content in `attributedBody` rather than `text` and won't appear in a text-column search. For thorough results, spawn a subagent to search rich text blobs:
+
+    ```
+    Use the Agent tool to search attributedBody content.
+
+    Prompt: "Search iMessage attributedBody for '<search_term>'. Run this command:
+
+    sqlite3 ~/Library/Messages/chat.db "
+    SELECT m.ROWID, h.id,
+      CASE WHEN m.is_from_me = 1 THEN 'Me' ELSE 'Them' END,
+      datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime')
+    FROM message m
+    JOIN handle h ON m.handle_id = h.ROWID
+    WHERE m.text IS NULL AND m.attributedBody IS NOT NULL
+    ORDER BY m.date DESC
+    LIMIT 100;"
+
+    Then for each ROWID, extract text with:
+    sqlite3 ~/Library/Messages/chat.db "SELECT HEX(attributedBody) FROM message WHERE ROWID = <ROWID>;" | xxd -r -p | strings
+
+    Check if the extracted text contains '<search_term>' (case-insensitive). Return only matching messages with their ROWID, contact, sender, timestamp, and the extracted text."
+    ```
+  </Step>
+
+  <Step title="Search within a date range (optional)">
+    If you specify a time period, add a date filter using the iMessage CoreData epoch offset:
+
+    ```bash
+    sqlite3 ~/Library/Messages/chat.db "
+    SELECT
+      m.ROWID,
+      h.id as contact,
+      CASE WHEN m.is_from_me = 1 THEN 'Me' ELSE 'Them' END as sender,
+      m.text,
+      datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime') as timestamp
+    FROM message m
+    JOIN handle h ON m.handle_id = h.ROWID
+    WHERE m.text LIKE '%<search_term>%'
+      AND m.date > (strftime('%s', '<YYYY-MM-DD>') - 978307200) * 1000000000
+    ORDER BY m.date DESC
+    LIMIT 20;"
+    ```
+  </Step>
+
+  <Step title="Search within a specific conversation (optional)">
+    If you want to search within one contact's messages, filter by handle:
+
+    ```bash
+    sqlite3 ~/Library/Messages/chat.db "
+    SELECT
+      m.ROWID,
+      CASE WHEN m.is_from_me = 1 THEN 'Me' ELSE 'Them' END as sender,
+      m.text,
+      datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime') as timestamp
+    FROM message m
+    JOIN handle h ON m.handle_id = h.ROWID
+    WHERE h.id LIKE '%<digits_only>'
+      AND m.text LIKE '%<search_term>%'
+    ORDER BY m.date DESC
+    LIMIT 20;"
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Apple Mail search
+
+<Tabs>
+  <Tab title="By subject">
+    ```bash
+    sqlite3 ~/Library/Mail/V10/MailData/"Envelope Index" "
+    SELECT
+      m.ROWID,
+      a.comment as sender_name,
+      a.address as sender_email,
+      sub.subject,
+      datetime(m.date_received, 'unixepoch', 'localtime') as received,
+      CASE WHEN m.read = 1 THEN 'Read' ELSE 'UNREAD' END as status
+    FROM messages m
+    LEFT JOIN addresses a ON m.sender = a.ROWID
+    LEFT JOIN subjects sub ON m.subject = sub.ROWID
+    WHERE sub.subject LIKE '%<search_term>%'
+      AND m.deleted = 0
+    ORDER BY m.date_received DESC
+    LIMIT 20;"
+    ```
+  </Tab>
+  <Tab title="By sender">
+    ```bash
+    sqlite3 ~/Library/Mail/V10/MailData/"Envelope Index" "
+    SELECT
+      m.ROWID,
+      a.comment as sender_name,
+      a.address as sender_email,
+      sub.subject,
+      datetime(m.date_received, 'unixepoch', 'localtime') as received,
+      CASE WHEN m.read = 1 THEN 'Read' ELSE 'UNREAD' END as status
+    FROM messages m
+    LEFT JOIN addresses a ON m.sender = a.ROWID
+    LEFT JOIN subjects sub ON m.subject = sub.ROWID
+    WHERE (a.address LIKE '%<search_term>%' OR a.comment LIKE '%<search_term>%')
+      AND m.deleted = 0
+    ORDER BY m.date_received DESC
+    LIMIT 20;"
+    ```
+  </Tab>
+  <Tab title="By date range">
+    ```bash
+    sqlite3 ~/Library/Mail/V10/MailData/"Envelope Index" "
+    SELECT
+      m.ROWID,
+      a.comment as sender_name,
+      a.address as sender_email,
+      sub.subject,
+      datetime(m.date_received, 'unixepoch', 'localtime') as received
+    FROM messages m
+    LEFT JOIN addresses a ON m.sender = a.ROWID
+    LEFT JOIN subjects sub ON m.subject = sub.ROWID
+    WHERE sub.subject LIKE '%<search_term>%'
+      AND m.date_received > strftime('%s', '<YYYY-MM-DD>')
+      AND m.deleted = 0
+    ORDER BY m.date_received DESC
+    LIMIT 20;"
+    ```
+  </Tab>
+</Tabs>
+
+### Reading a matched email body
+
+To read the full body of a matched email, locate and read its `.emlx` file:
+
+```bash
+find ~/Library/Mail/V10 -name "<MESSAGE_ROWID>.emlx" 2>/dev/null | head -1
+```
+
+```bash
+cat "$(find ~/Library/Mail/V10 -name '<MESSAGE_ROWID>.emlx' 2>/dev/null | head -1)" | tail -n +2 | sed 's/<[^>]*>//g' | head -50
+```
+
+---
+
+## Cross-source search (iMessage + Mail)
+
+For ambiguous queries, the agent spawns two parallel subagents:
+
+1. **iMessage subagent** — runs the text search and attributedBody search (Steps 1–2 above)
+2. **Mail subagent** — runs the email subject search above
+
+Results are merged and presented grouped by source.
+
+After the iMessage search completes, a **contact-resolver subagent** resolves the unique phone numbers from results to display contact names.
+
+---
+
+## Output format
+
+```
+## Search results for "dinner"
+
+### iMessages — 5 matches across 3 conversations
+
+**John Smith (+1234567890)**
+- **Mar 16, 18:30 — Me**: "Want to grab dinner tonight?"
+- **Mar 16, 18:45 — John**: "Sure! How about that new dinner place on 5th?"
+
+**Jane Doe (+0987654321)**
+- **Mar 14, 12:00 — Jane**: "Dinner at mom's this Sunday?"
+- **Mar 14, 12:05 — Me**: "I'll be there for dinner!"
+
+**+1555000111**
+- **Mar 10, 19:00 — Them**: "Dinner was great, thanks for coming"
+
+---
+
+### Emails — 3 matches
+
+| Status | From | Subject | Received |
+|--------|------|---------|----------|
+| Read | OpenTable (no-reply@opentable.com) | Your dinner reservation | Mar 16, 12:00 |
+| Read | Jane Doe (jane@corp.com) | Team dinner RSVP | Mar 13, 10:00 |
+| UNREAD | Mom (mom@email.com) | Sunday dinner menu | Mar 12, 14:00 |
+```
+
+## Suggested follow-ups
+
+- **Read a full conversation** — "Want to see the full conversation around any of these messages?" → routes to [conversation-reader](/agents/conversation-reader)
+- **Read an email** — "Want to read any of these emails in full?" → routes to [mail-reader](/agents/mail-reader)
+- **Expand the search** — "Want me to search with different terms or a broader date range?"
