@@ -1,0 +1,65 @@
+{
+  "projectType": "general",
+  "projectName": "iMessage & Mail",
+  "projectDescription": "A Claude Code skill for reading, searching, and sending iMessages and emails on macOS by querying local SQLite databases and using AppleScript.",
+  "theme": "palm",
+  "primaryColor": "#141414",
+  "lightColor": "#da7656",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart", "requirements"]
+          },
+          {
+            "group": "Setup",
+            "pages": ["setup/installation", "setup/permissions", "setup/configuration"]
+          },
+          {
+            "group": "Agents",
+            "pages": [
+              "agents/overview",
+              "agents/recent-activity",
+              "agents/conversation-reader",
+              "agents/message-search",
+              "agents/attachment-finder",
+              "agents/mail-reader",
+              "agents/send-message"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": ["reference/architecture", "reference/databases", "reference/applescript", "reference/troubleshooting"]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Read recent iMessage and Apple Mail activity with contact resolution",
+    "Full conversation history for any contact via SQLite queries",
+    "Full-text search across iMessages and Apple Mail simultaneously",
+    "Find attachments (photos, videos, PDFs) from messages and emails",
+    "Send iMessages and emails via AppleScript with confirmation prompt",
+    "Parallel subagent architecture for performance",
+    "Runs entirely locally — no data sent to external services"
+  ],
+  "publicApiSurface": [
+    "/imessage-mail recent",
+    "/imessage-mail messages from <contact>",
+    "/imessage-mail search <query>",
+    "/imessage-mail email",
+    "/imessage-mail send <message>",
+    "/imessage-mail find attachments from <contact>",
+    "agents/recent-activity.md",
+    "agents/conversation-reader.md",
+    "agents/message-search.md",
+    "agents/attachment-finder.md",
+    "agents/mail-reader.md",
+    "agents/send-message.md"
+  ]
+}
